@@ -1,0 +1,3 @@
+http://127.0.0.1:3000/gen?name=FF&count=1&region=IND
+
+http://127.0.0.1:3000/gen?name={your_name}&count={count}&region={your_region}
