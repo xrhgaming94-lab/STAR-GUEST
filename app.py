@@ -7,7 +7,6 @@ import random
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 import json
-from protobuf_decoder.protobuf_decoder import Parser
 import codecs
 import time
 from datetime import datetime
@@ -16,9 +15,15 @@ import base64
 import concurrent.futures
 import threading
 import os
+import logging
 import re
 
-# Disable only the InsecureRequestWarning
+# ---------- CREDITS ------------------
+# t.me/PVT_STAR
+# ---------- CREDIT -------------------
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
@@ -26,23 +31,27 @@ app = Flask(__name__)
 # ---------------- KEYS ---------------- #
 hex_key = "32656534343831396539623435393838343531343130363762323831363231383734643064356437616639643866376530306331653534373135623764316533"
 key = bytes.fromhex(hex_key)
+CLIENT_SECRET_STR = "2ee44819e9b4598845141067b281621874d0d5d7af9d8f7e00c1e54715b7d1e3"
 
-REGION_LANG = {"ME": "ar","IND": "hi","ID": "id","VN": "vi","TH": "th","BD": "bn","PK": "ur","TW": "zh","EU": "en","RU": "ru","NA": "en","SAC": "es","BR": "pt"}
+AES_KEY = bytes([89,103,38,116,99,37,68,69,117,104,54,37,90,99,94,56])
+AES_IV  = bytes([54,111,121,90,68,114,50,50,69,51,121,99,104,106,77,37])
+
+REGION_LANG = {"ME": "ar","IND": "hi","ID": "id","VN": "vi","TH": "th","BD": "bn","PK": "ur","TW": "zh","RU": "ru","NA": "en","SAC": "es","BR": "pt"}
 REGION_URLS = {
     "IND": "https://client.ind.freefiremobile.com/",
-    "ID": "https://clientbp.ggblueshark.com/",
+    "ID": "https://clientbp.ggpolarbear.com/",
     "BR": "https://client.us.freefiremobile.com/",
-    "ME": "https://clientbp.common.ggbluefox.com/",
-    "VN": "https://clientbp.ggblueshark.com/",
-    "TH": "https://clientbp.common.ggbluefox.com/",
-    "RU": "https://clientbp.ggblueshark.com/",
-    "BD": "https://clientbp.ggblueshark.com/",
-    "PK": "https://clientbp.ggblueshark.com/",
-    "SG": "https://clientbp.ggblueshark.com/",
+    "ME": "https://clientbp.ggpolarbear.com/",
+    "VN": "https://clientbp.ggpolarbear.com/",
+    "TH": "https://clientbp.ggpolarbear.com/",
+    "RU": "https://clientbp.ggpolarbear.com/",
+    "BD": "https://clientbp.ggpolarbear.com/",
+    "PK": "https://clientbp.ggpolarbear.com/",
+    "SG": "https://clientbp.ggpolarbear.com/",
     "NA": "https://client.us.freefiremobile.com/",
     "SAC": "https://client.us.freefiremobile.com/",
-    "EU": "https://clientbp.ggblueshark.com/",
-    "TW": "https://clientbp.ggblueshark.com/"
+    "EU": "https://clientbp.ggpolarbear.com/",
+    "TW": "https://clientbp.ggpolarbear.com/"
 }
 
 def get_region(language_code: str) -> str:
@@ -51,25 +60,17 @@ def get_region(language_code: str) -> str:
 def get_region_url(region_code: str) -> str:
     return REGION_URLS.get(region_code, None)
 
-# Thread-local storage for requests
 thread_local = threading.local()
 
 def get_session():
     if not hasattr(thread_local, "session"):
         thread_local.session = requests.Session()
-        # Add retry mechanism
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
-        
-        retry_strategy = Retry(
-            total=2,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-        )
+        retry_strategy = Retry(total=2, backoff_factor=0.5, status_forcelist=[429,500,502,503,504])
         adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=100, pool_maxsize=100)
         thread_local.session.mount("http://", adapter)
         thread_local.session.mount("https://", adapter)
-        
     return thread_local.session
 
 # ---------------- PROTOBUF ENCODING ---------------- #
@@ -121,566 +122,325 @@ def encrypt_api(plain_text):
     cipher_text = cipher.encrypt(pad(plain_text, AES.block_size))
     return cipher_text.hex()
 
-# ---------------- NAME / PASSWORD ---------------- #
-def generate_random_name(name_prefix):
-    characters = string.ascii_letters + string.digits
-    return name_prefix + ''.join(random.choice(characters) for _ in range(6)).upper()
+def encrypt_aes_cbc(plain_bytes: bytes) -> bytes:
+    cipher = AES.new(AES_KEY, AES.MODE_CBC, AES_IV)
+    return cipher.encrypt(pad(plain_bytes, AES.block_size))
 
-def generate_custom_password():
-    characters = string.ascii_letters + string.digits
-    random_part = ''.join(random.choice(characters) for _ in range(9)).upper()
-    return f"STAR-{random_part}-CORE"
-
-# ---------------- Get Account ID from Friend List API ---------------- #
-def get_account_id_from_friend_list(uid, password):
-    """
-    दिए गए URL का उपयोग करके अकाउंट आईडी प्राप्त करता है।
-    Response format: {"your_id": 14826062250}
-    """
+# ---------------- JWT ACCOUNT_ID EXTRACTION (from NEW-GENN.py) ---------------- #
+def extract_account_id_from_jwt(jwt_token):
+    """Extract account_id from JWT token payload - Logic from NEW-GENN.py"""
     try:
-        url = f"https://danger-friend-management.vercel.app/get_friends_list?uid={uid}&password={password}"
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'application/json'
-        }
-        
-        print(f"🔄 Calling Friend List API for UID: {uid}")
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            print(f"📦 Friend List API Response: {data}")
-            
-            # TRY ALL POSSIBLE FIELD NAMES
-            possible_fields = ['your_id', 'your_uid', 'uid', 'account_id', 'id', 'userId', 'user_id']
-            for field in possible_fields:
-                if field in data:
-                    account_id = str(data[field])
-                    print(f"✅ Account ID मिला field '{field}' से: {account_id}")
-                    return account_id
-            
-            # AGAR KOI FIELD NAHI MILI TO POORA RESPONSE DEKHO
-            print(f"⚠️ कोई account ID फील्ड नहीं मिला. Available fields: {list(data.keys())}")
-            
-            # LAST OPTION: AGAR RESPONSE MEIN SIRF EK KEY HAI TO USKA VALUE LE LO
-            if len(data) == 1:
-                only_key = list(data.keys())[0]
-                account_id = str(data[only_key])
-                print(f"✅ Account ID मिला single key '{only_key}' से: {account_id}")
-                return account_id
-                
-        else:
-            print(f"⚠️ friend list API ने स्टेटस कोड दिया: {response.status_code}")
-            
-    except Exception as e:
-        print(f"⚠️ friend list API एरर: {e}")
-        
-    return "N/A"
-
-# ---------------- Account creation (register/token) ---------------- #
-def create_single_account(args):
-    name_prefix, region = args
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            result = create_acc(region, name_prefix)
-            if result and result.get('uid') and result.get('password') and result.get('status') == "full_login":
-                return result
-            time.sleep(1)
-        except Exception as e:
-            time.sleep(1)
-    return None
-
-def create_acc(region, name_prefix):
-    """
-    Complete account creation flow - exactly like gen.py
-    """
-    password = generate_custom_password()
-    session = get_session()
-    
-    # Step 1: Guest Register
-    data = f"password={password}&client_type=2&source=2&app_id=100067"
-    message = data.encode('utf-8')
-    signature = hmac.new(key, message, hashlib.sha256).hexdigest()
-
-    url = "https://100067.connect.garena.com/oauth/guest/register"
-    headers = {
-        "User-Agent": "GarenaMSDK/4.0.19P8(ASUS_Z01QD ;Android 12;en;US;)",
-        "Authorization": "Signature " + signature,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept-Encoding": "gzip",
-        "Connection": "Keep-Alive"
-    }
-
-    try:
-        response = session.post(url, headers=headers, data=data, timeout=30)
-        resp_json = response.json()
-        uid = resp_json.get('uid')
-        if not uid:
+        if not jwt_token:
             return None
-        return token(uid, password, region, name_prefix)
+        
+        # Find JWT token in response text (handles extra characters)
+        jwt_start = jwt_token.find("eyJ")
+        if jwt_start != -1:
+            jwt_token = jwt_token[jwt_start:]
+        
+        # Clean up JWT token
+        second_dot = jwt_token.find(".", jwt_token.find(".") + 1)
+        if second_dot != -1:
+            jwt_token = jwt_token[:second_dot + 44]
+        
+        # Split JWT token
+        parts = jwt_token.split('.')
+        if len(parts) >= 2:
+            payload_part = parts[1]
+            # Add padding if needed
+            padding = 4 - len(payload_part) % 4
+            if padding != 4:
+                payload_part += '=' * padding
+            # Decode base64 payload
+            decoded = base64.urlsafe_b64decode(payload_part)
+            data = json.loads(decoded)
+            
+            # Try to get account_id or external_id
+            account_id = data.get('account_id') or data.get('external_id')
+            if account_id:
+                return str(account_id)
+        
+        return None
     except Exception as e:
+        logger.error(f"Failed to extract account_id from JWT: {e}")
         return None
 
-def token(uid, password, region, name_prefix):
-    # Step 2: Token Grant
-    session = get_session()
-    url = "https://100067.connect.garena.com/oauth/guest/token/grant"
+# ---------- Password Generation (STAR format) ----------
+def generate_hashed_password() -> str:
+    prefix = "STAR-"
+    suffix = "-CORE"
+    characters = string.ascii_uppercase + string.digits
+    random_part = ''.join(random.choice(characters) for _ in range(9))
+    return f"{prefix}{random_part}{suffix}"
+
+def generate_custom_nickname(name_prefix):
+    return name_prefix[:6] + ''.join(random.choices(string.ascii_letters, k=4))
+
+# ---------- Guest Register v2 ----------
+def guest_register_v2(password_hash: str) -> str:
+    url = "https://100067.connect.garena.com/api/v2/oauth/guest:register"
+    payload = {"app_id":100067, "client_type":2, "password":password_hash, "source":2}
+    json_body = json.dumps(payload, separators=(',',':'))
+    data_to_sign = CLIENT_SECRET_STR + json_body
+    signature = hashlib.sha256(data_to_sign.encode()).hexdigest()
     headers = {
-        "Accept-Encoding": "gzip",
-        "Connection": "Keep-Alive",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Host": "100067.connect.garena.com",
         "User-Agent": "GarenaMSDK/4.0.19P8(ASUS_Z01QD ;Android 12;en;US;)",
+        "Authorization": f"Signature {signature}",
+        "Content-Type": "application/json; charset=utf-8"
     }
+    session = get_session()
+    resp = session.post(url, data=json_body, headers=headers, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("code") != 0:
+        raise Exception(f"Guest register failed: {data}")
+    return data["data"]["uid"]
 
-    body = {
-        "uid": uid,
-        "password": password,
-        "response_type": "token",
-        "client_type": "2",
-        "client_secret": key,
-        "client_id": "100067"
+def grant_token_v2(uid: str, password_hash: str):
+    url = "https://100067.connect.garena.com/api/v2/oauth/guest/token:grant"
+    payload = {
+        "client_id":100067, "client_secret":CLIENT_SECRET_STR, "client_type":2,
+        "password":password_hash, "response_type":"token", "uid":uid
     }
+    headers = {"User-Agent": "GarenaMSDK/4.0.19P8(ASUS_Z01QD ;Android 12;en;US;)", "Content-Type": "application/json"}
+    session = get_session()
+    resp = session.post(url, json=payload, headers=headers, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("code") != 0:
+        raise Exception(f"Token grant failed: {data}")
+    return data["data"]["access_token"], data["data"]["open_id"]
 
-    try:
-        response = session.post(url, headers=headers, data=body, timeout=30)
-        resp_json = response.json()
-        open_id = resp_json.get('open_id')
-        access_token = resp_json.get("access_token")
-
-        if not open_id or not access_token:
-            return None
-
-        result = encode_string(open_id)
-        field = to_unicode_escaped(result['field_14'])
-        field = codecs.decode(field, 'unicode_escape').encode('latin1')
-
-        return Major_Regsiter(access_token, open_id, field, uid, password, region, name_prefix)
-    except Exception as e:
-        return None
-
-# ---------------- Encode helpers ---------------- #
+# ---------- Encode functions ----------
 def encode_string(original):
-    keystream = [
-        0x30,0x30,0x30,0x32,0x30,0x31,0x37,0x30,
-        0x30,0x30,0x30,0x30,0x32,0x30,0x31,0x37,
-        0x30,0x30,0x30,0x30,0x30,0x32,0x30,0x31,
-        0x37,0x30,0x30,0x30,0x30,0x30,0x32,0x30
-    ]
+    keystream = [0x30,0x30,0x30,0x32,0x30,0x31,0x37,0x30,0x30,0x30,0x30,0x30,0x32,0x30,0x31,0x37,0x30,0x30,0x30,0x30,0x30,0x32,0x30,0x31,0x37,0x30,0x30,0x30,0x30,0x30,0x32,0x30]
     encoded = ""
-    for i in range(len(original)):
-        orig_byte = ord(original[i])
-        key_byte = keystream[i % len(keystream)]
-        result_byte = orig_byte ^ key_byte
-        encoded += chr(result_byte)
+    for i, ch in enumerate(original):
+        encoded += chr(ord(ch) ^ keystream[i % len(keystream)])
     return {"open_id": original, "field_14": encoded}
 
 def to_unicode_escaped(s):
     return ''.join(c if 32 <= ord(c) <= 126 else f'\\u{ord(c):04x}' for c in s)
 
-# ---------------- Major register -> login flow ---------------- #
-def Major_Regsiter(access_token, open_id, field, uid, password, region, name_prefix):
-    # Step 3: Major Register
+# ---------- MajorRegister ----------
+def Major_Regsiter(access_token, open_id, field, uid, password, region, nickname):
     session = get_session()
-    url = "https://loginbp.ggblueshark.com/MajorRegister"
-    internal_name = generate_random_name(name_prefix)
-
+    url = "https://loginbp.ggpolarbear.com/MajorRegister"
     headers = {
-        "Accept-Encoding": "gzip",
-        "Authorization": "Bearer",
-        "Connection": "Keep-Alive",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Expect": "100-continue",
-        "Host": "loginbp.ggblueshark.com",
-        "ReleaseVersion": "OB53",
+        "Accept-Encoding": "gzip", "Authorization": "Bearer", "Connection": "Keep-Alive",
+        "Content-Type": "application/x-www-form-urlencoded", "Expect": "100-continue",
+        "Host": "loginbp.ggpolarbear.com", "ReleaseVersion": "OB53",
         "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_I005DA Build/PI)",
-        "X-GA": "v1 1",
-        "X-Unity-Version": "2018.4.11f1"
+        "X-GA": "v1 1", "X-Unity-Version": "2018.4.11f1"
     }
-
     payload = {
-        1: internal_name,
-        2: access_token,
-        3: open_id,
-        5: 102000007,
-        6: 4,
-        7: 1,
-        13: 1,
-        14: field,
-        15: "en",
-        16: 1,
-        17: 1
+        1: nickname, 2: access_token, 3: open_id, 5: 102000007, 6: 4, 7: 1,
+        13: 1, 14: field, 15: "en", 16: 2
     }
-
-    try:
-        payload_hex = CrEaTe_ProTo(payload).hex()
-        payload_enc = E_AEs(payload_hex).hex()
-        body = bytes.fromhex(payload_enc)
-        response = session.post(url, headers=headers, data=body, verify=False, timeout=30)
-        
-        # Step 4: Proceed to Login - EXACTLY like gen.py
-        return login(uid, password, access_token, open_id, response.content.hex(), response.status_code, internal_name, region)
-    except Exception as e:
+    payload_hex = CrEaTe_ProTo(payload).hex()
+    payload_enc = E_AEs(payload_hex).hex()
+    body = bytes.fromhex(payload_enc)
+    response = session.post(url, headers=headers, data=body, verify=False, timeout=30)
+    if response.status_code != 200:
+        logger.error(f"MajorRegister failed: {response.text[:200]}")
         return None
+    return login(uid, password, access_token, open_id, response.content.hex(),
+                 response.status_code, nickname, region)
 
-def chooseregion(data_bytes, jwt_token):
-    url = "https://loginbp.ggblueshark.com/ChooseRegion"
-    headers = {
-        'User-Agent': "Dalvik/2.1.0 (Linux; U; Android 12; M2101K7AG Build/SKQ1.210908.001)",
-        'Connection': "Keep-Alive",
-        'Accept-Encoding': "gzip",
-        'Content-Type': "application/x-www-form-urlencoded",
-        'Expect': "100-continue",
-        'Authorization': f"Bearer {jwt_token}",
-        'X-Unity-Version': "2018.4.11f1",
-        'X-GA': "v1 1",
-        'ReleaseVersion': "OB53"
-    }
-    try:
-        session = get_session()
-        response = session.post(url, data=data_bytes, headers=headers, verify=False, timeout=30)
-        return response.status_code
-    except Exception:
-        return None
-
-def login(uid, password, access_token, open_id, response_hex, status_code, name, region):
-    # Step 4: Major Login - EXACTLY like gen.py
-    lang = get_region(region)
-    if not lang:
-        lang = "en"
+# ---------- Login with JWT extraction and account_id ----------
+def login(uid, password, access_token, open_id, response_hex, status_code, name, region, retry_lock=False):
+    lang = get_region(region) or "en"
     lang_b = lang.encode("ascii")
     headers = {
-        "Accept-Encoding": "gzip",
-        "Authorization": "Bearer",
-        "Connection": "Keep-Alive",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Expect": "100-continue",
-        "Host": "loginbp.ggblueshark.com",
-        "ReleaseVersion": "OB53",
+        "Accept-Encoding": "gzip", "Authorization": "Bearer", "Connection": "Keep-Alive",
+        "Content-Type": "application/x-www-form-urlencoded", "Expect": "100-continue",
+        "Host": "loginbp.ggpolarbear.com", "ReleaseVersion": "OB53",
         "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_I005DA Build/PI)",
-        "X-GA": "v1 1",
-        "X-Unity-Version": "2018.4.11f1"
+        "X-GA": "v1 1", "X-Unity-Version": "2018.4.11f1"
     }
-
-    # This payload is reused from original gen.py
-    payload = b'\x1a\x132025-08-30 05:19:21"\tfree fire(\x01:\x081.114.13B2Android OS 9 / API-28 (PI/rel.cjw.20220518.114133)J\x08HandheldR\nATM MobilsZ\x04WIFI`\xb6\nh\xee\x05r\x03300z\x1fARMv7 VFPv3 NEON VMH | 2400 | 2\x80\x01\xc9\x0f\x8a\x01\x0fAdreno (TM) 640\x92\x01\rOpenGL ES 3.2\x9a\x01+Google|dfa4ab4b-9dc4-454e-8065-e70c733fa53f\xa2\x01\x0e105.235.139.91\xaa\x01\x02' + lang_b + b'\xb2\x01 1d8ec0240ede109973f3321b9354b44d\xba\x01\x014\xc2\x01\x08Handheld\xca\x01\x10Asus ASUS_I005DA\xea\x01@afcfbf13334be42036e4f742c80b956344bed760ac91b3aff9b607a610ab4390\xf0\x01\x01\xca\x02\nATM Mobils\xd2\x02\x04WIFI\xca\x03 7428b253defc164018c604a1ebbfebdf\xe0\x03\xa8\x81\x02\xe8\x03\xf6\xe5\x01\xf0\x03\xaf\x13\xf8\x03\x84\x07\x80\x04\xe7\xf0\x01\x88\x04\xa8\x81\x02\x90\x04\xe7\xf0\x01\x98\x04\xa8\x81\x02\xc8\x04\x01\xd2\x04=/data/app/com.dts.freefireth-PdeDnOilCSFn37p1AH_FLg==/lib/arm\xe0\x04\x01\xea\x04_2087f61c19f57f2af4e7feff0b24d9d9|/data/app/com.dts.freefireth-PdeDnOilCSFn37p1AH_FLg==/base.apk\xf0\x04\x03\xf8\x04\x01\x8a\x05\x0232\x9a\x05\n2019118692\xb2\x05\tOpenGLES2\xb8\x05\xff\x7f\xc0\x05\x04\xe0\x05\xf3F\xea\x05\x07android\xf2\x05pKqsHT5ZLWrYljNb5Vqh//yFRlaPHSO9NWSQsVvOmdhEEn7W+VHNUK+Q+fduA3ptNrGB0Ll0LRz3WW0jOwesLj6aiU7sZ40p8BfUE/FI/jzSTwRe2\xf8\x05\xfb\xe4\x06\x88\x06\x01\x90\x06\x01\x9a\x06\x014\xa2\x06\x014\xb2\x06"GQ@O\x00\x0e^\x00D\x06UA\x0ePM\r\x13hZ\x07T\x06\x0cm\\V\x0ejYV;\x0bU5'
+    payload = b'\x1a\x132025-08-30 05:19:21"\tfree fire(\x01:\x081.123.13B2Android OS 9 / API-28 (PI/rel.cjw.20220518.114133)J\x08HandheldR\nATM MobilsZ\x04WIFI`\xb6\nh\xee\x05r\x03300z\x1fARMv7 VFPv3 NEON VMH | 2400 | 2\x80\x01\xc9\x0f\x8a\x01\x0fAdreno (TM) 640\x92\x01\rOpenGL ES 3.2\x9a\x01+Google|dfa4ab4b-9dc4-454e-8065-e70c733fa53f\xa2\x01\x0e105.235.139.91\xaa\x01\x02' + lang_b + b'\xb2\x01 1d8ec0240ede109973f3321b9354b44d\xba\x01\x014\xc2\x01\x08Handheld\xca\x01\x10Asus ASUS_I005DA\xea\x01@afcfbf13334be42036e4f742c80b956344bed760ac91b3aff9b607a610ab4390\xf0\x01\x01\xca\x02\nATM Mobils\xd2\x02\x04WIFI\xca\x03 7428b253defc164018c604a1ebbfebdf\xe0\x03\xa8\x81\x02\xe8\x03\xf6\xe5\x01\xf0\x03\xaf\x13\xf8\x03\x84\x07\x80\x04\xe7\xf0\x01\x88\x04\xa8\x81\x02\x90\x04\xe7\xf0\x01\x98\x04\xa8\x81\x02\xc8\x04\x01\xd2\x04=/data/app/com.dts.freefireth-PdeDnOilCSFn37p1AH_FLg==/lib/arm\xe0\x04\x01\xea\x04_2087f61c19f57f2af4e7feff0b24d9d9|/data/app/com.dts.freefireth-PdeDnOilCSFn37p1AH_FLg==/base.apk\xf0\x04\x03\xf8\x04\x01\x8a\x05\x0232\x9a\x05\n2019118692\xb2\x05\tOpenGLES2\xb8\x05\xff\x7f\xc0\x05\x04\xe0\x05\xf3F\xea\x05\x07android\xf2\x05pKqsHT5ZLWrYljNb5Vqh//yFRlaPHSO9NWSQsVvOmdhEEn7W+VHNUK+Q+fduA3ptNrGB0Ll0LRz3WW0jOwesLj6aiU7sZ40p8BfUE/FI/jzSTwRe2\xf8\x05\xfb\xe4\x06\x88\x06\x01\x90\x06\x01\x9a\x06\x014\xa2\x06\x014\xb2\x06"GQ@O\x00\x0e^\x00D\x06UA\x0ePM\r\x13hZ\x07T\x06\x0cm\\V\x0ejYV;\x0bU5'
     data = payload
-    try:
-        data = data.replace(b'afcfbf13334be42036e4f742c80b956344bed760ac91b3aff9b607a610ab4390', access_token.encode())
-        data = data.replace(b'1d8ec0240ede109973f3321b9354b44d', open_id.encode())
-    except Exception:
-        pass
-
+    data = data.replace(b'afcfbf13334be42036e4f742c80b956344bed760ac91b3aff9b607a610ab4390', access_token.encode())
+    data = data.replace(b'1d8ec0240ede109973f3321b9354b44d', open_id.encode())
     d = encrypt_api(data.hex())
     Final_Payload = bytes.fromhex(d)
+    URL = "https://loginbp.ggpolarbear.com/MajorLogin"
 
-    if region.lower() == "me":
-        URL = "https://loginbp.common.ggbluefox.com/MajorLogin"
-    else:
-        URL = "https://loginbp.ggblueshark.com/MajorLogin"
+    session = get_session()
+    RESPONSE = session.post(URL, headers=headers, data=Final_Payload, verify=False, timeout=30)
+    if RESPONSE.status_code != 200:
+        logger.error(f"MajorLogin failed: {RESPONSE.status_code}")
+        return None
+    if len(RESPONSE.text) < 10:
+        logger.error("MajorLogin response too short")
+        return None
+
+    # Extract JWT from response and get account_id
+    response_text = RESPONSE.text
+    jwt_token = None
+    account_id = None
     
-    try:
-        session = get_session()
-        RESPONSE = session.post(URL, headers=headers, data=Final_Payload, verify=False, timeout=30)
-    except Exception:
-        return None
-
-    # If login successful, extract JWT token and proceed to GetLoginData
-    if RESPONSE.status_code == 200:
-        # If text length small, it's probably an error
-        if len(RESPONSE.text) < 10:
-            return None
-
-        # Get account ID from friend list API
-        account_id = get_account_id_from_friend_list(uid, password)
-
-        # Try to use protobuf parser path for non-ar/en languages
-        if lang.lower() not in ["ar", "en"]:
-            json_result = get_available_room(RESPONSE.content.hex())
-            parsed_data = json.loads(json_result) if json_result else {}
-            BASE64_TOKEN = parsed_data.get('8', {}).get('data')
-            if BASE64_TOKEN:
-                # region mapping for cis
-                if region.lower() == "ru":
-                    region = "RU"
-                fields = {1: region}
-                fields_h = bytes.fromhex(encrypt_api(CrEaTe_ProTo(fields).hex()))
-                r = chooseregion(fields_h, BASE64_TOKEN)
-                if r == 200:
-                    result = login_server(uid, password, access_token, open_id, RESPONSE.content.hex(), RESPONSE.status_code, name, region)
-                    if result:
-                        result['account_id'] = account_id
-                        return result
-        
-        # Try extract embedded JWT token substring for typical responses
+    # Find JWT token in response
+    jwt_start = response_text.find("eyJ")
+    if jwt_start != -1:
+        jwt_token = response_text[jwt_start:]
+        # Extract account_id from JWT
+        account_id = extract_account_id_from_jwt(jwt_token)
+    
+    if not account_id:
+        logger.warning("Could not extract account_id from JWT")
+        account_id = "N/A"
+    
+    # Call ChooseRegion if needed (from NEW-GENN.py logic)
+    if not retry_lock:
         try:
-            start_idx = RESPONSE.text.find("eyJhbGci")
-            if start_idx != -1:
-                BASE64_TOKEN = RESPONSE.text[start_idx:-1]
-                # trim to expected length (original did a cut)
-                second_dot_index = BASE64_TOKEN.find(".", BASE64_TOKEN.find(".") + 1)
-                time.sleep(0.2)
-                BASE64_TOKEN = BASE64_TOKEN[:second_dot_index+44] if second_dot_index != -1 else BASE64_TOKEN
-                dat = GET_PAYLOAD_BY_DATA(BASE64_TOKEN, access_token, 1, response_hex, status_code, name, uid, password, region)
-                if dat:
-                    dat['account_id'] = account_id
-                    return dat
-        except Exception:
-            pass
-
-        # Return account with account_id
-        return {
-            "uid": uid,
-            "password": password,
-            "name": name,
-            "region": region,
-            "account_id": account_id,
-            "status": "full_login"
-        }
-
-    return None
-
-def login_server(uid, password, access_token, open_id, response, status_code, name, region):
-    lang = get_region(region)
-    if not lang: lang = "en"
-    lang_b = lang.encode("ascii")
-
-    headers = {
-        "Accept-Encoding": "gzip",
-        "Authorization": "Bearer",
-        "Connection": "Keep-Alive",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Expect": "100-continue",
-        "Host": "loginbp.ggblueshark.com",
-        "ReleaseVersion": "OB53",
-        "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_I005DA Build/PI)",
-        "X-GA": "v1 1",
-        "X-Unity-Version": "2018.4.11f1"
+            region_code = "RU" if region.upper() == "CIS" else region.upper()
+            proto_data = CrEaTe_ProTo({1: region_code})
+            encrypted_data = encrypt_api(proto_data.hex())
+            choose_payload = bytes.fromhex(encrypted_data)
+            choose_headers = {
+                'User-Agent': "Dalvik/2.1.0 (Linux; U; Android 12; M2101K7AG Build/SKQ1.210908.001)",
+                'Connection': "Keep-Alive", 'Accept-Encoding': "gzip",
+                'Content-Type': "application/x-www-form-urlencoded", 'Expect': "100-continue",
+                'Authorization': f"Bearer {jwt_token}", 'X-Unity-Version': "2018.4.11f1",
+                'X-GA': "v1 1", 'ReleaseVersion': "OB53"
+            }
+            choose_url = "https://loginbp.ggpolarbear.com/ChooseRegion"
+            requests.post(choose_url, data=choose_payload, headers=choose_headers, verify=False, timeout=30)
+        except Exception as e:
+            logger.warning(f"ChooseRegion failed: {e}")
+    
+    return {
+        "uid": uid, 
+        "password": password, 
+        "name": name, 
+        "region": region, 
+        "status": "full_login", 
+        "stage": "complete",
+        "account_id": account_id,
+        "jwt_token": jwt_token[:100] + "..." if jwt_token and len(jwt_token) > 100 else jwt_token
     }
 
-    payload = b'\x1a\x132025-08-30 05:19:21"\tfree fire(\x01:\x081.114.13B2Android OS 9 / API-28 (PI/rel.cjw.20220518.114133)J\x08HandheldR\nATM MobilsZ\x04WIFI`\xb6\nh\xee\x05r\x03300z\x1fARMv7 VFPv3 NEON VMH | 2400 | 2\x80\x01\xc9\x0f\x8a\x01\x0fAdreno (TM) 640\x92\x01\rOpenGL ES 3.2\x9a\x01+Google|dfa4ab4b-9dc4-454e-8065-e70c733fa53f\xa2\x01\x0e105.235.139.91\xaa\x01\x02' + lang_b + b'\xb2\x01 1d8ec0240ede109973f3321b9354b44d\xba\x01\x014\xc2\x01\x08Handheld\xca\x01\x10Asus ASUS_I005DA\xea\x01@afcfbf13334be42036e4f742c80b956344bed760ac91b3aff9b607a610ab4390\xf0\x01\x01\xca\x02\nATM Mobils\xd2\x02\x04WIFI\xca\x03 7428b253defc164018c604a1ebbfebdf\xe0\x03\xa8\x81\x02\xe8\x03\xf6\xe5\x01\xf0\x03\xaf\x13\xf8\x03\x84\x07\x80\x04\xe7\xf0\x01\x88\x04\xa8\x81\x02\x90\x04\xe7\xf0\x01\x98\x04\xa8\x81\x02\xc8\x04\x01\xd2\x04=/data/app/com.dts.freefireth-PdeDnOilCSFn37p1AH_FLg==/lib/arm\xe0\x04\x01\xea\x04_2087f61c19f57f2af4e7feff0b24d9d9|/data/app/com.dts.freefireth-PdeDnOilCSFn37p1AH_FLg==/base.apk\xf0\x04\x03\xf8\x04\x01\x8a\x05\x0232\x9a\x05\n2019118692\xb2\x05\tOpenGLES2\xb8\x05\xff\x7f\xc0\x05\x04\xe0\x05\xf3F\xea\x05\x07android\xf2\x05pKqsHT5ZLWrYljNb5Vqh//yFRlaPHSO9NWSQsVvOmdhEEn7W+VHNUK+Q+fduA3ptNrGB0Ll0LRz3WW0jOwesLj6aiU7sZ40p8BfUE/FI/jzSTwRe2\xf8\x05\xfb\xe4\x06\x88\x06\x01\x90\x06\x01\x9a\x06\x014\xa2\x06\x014\xb2\x06"GQ@O\x00\x0e^\x00D\x06UA\x0ePM\r\x13hZ\x07T\x06\x0cm\\V\x0ejYV;\x0bU5'
-    data = payload
-    try:
-        data = data.replace(b'afcfbf13334be42036e4f742c80b956344bed760ac91b3aff9b607a610ab4390', access_token.encode())
-        data = data.replace(b'1d8ec0240ede109973f3321b9354b44d', open_id.encode())
-    except Exception:
-        pass
+# ---------- Main account creation ----------
+def create_single_account(args):
+    name_prefix, region = args
 
-    d = encrypt_api(data.hex())
-    Final_Payload = bytes.fromhex(d)
-    if region.lower() == "me":
-        URL = "https://loginbp.common.ggbluefox.com/MajorLogin"
-    else:
-        URL = "https://loginbp.ggblueshark.com/MajorLogin"
-
-    try:
-        session = get_session()
-        RESPONSE = session.post(URL, headers=headers, data=Final_Payload, verify=False, timeout=30)
-    except Exception:
-        return None
-
-    if RESPONSE.status_code == 200:
-        if len(RESPONSE.text) < 10:
-            return None
-
-        json_result = get_available_room(RESPONSE.content.hex())
-        parsed_data = json.loads(json_result) if json_result else {}
-        BASE64_TOKEN = parsed_data.get('8', {}).get('data')
-        if BASE64_TOKEN:
-            second_dot_index = BASE64_TOKEN.find(".", BASE64_TOKEN.find(".") + 1)
-            time.sleep(0.2)
-            if second_dot_index != -1:
-                BASE64_TOKEN = BASE64_TOKEN[:second_dot_index+44]
-            dat = GET_PAYLOAD_BY_DATA(BASE64_TOKEN, access_token, 1, response, status_code, name, uid, password, region)
-            return dat
-
-    return None
-
-# ---------------- Protobuf parse helpers ---------------- #
-def parse_results(parsed_results):
-    result_dict = {}
-    for result in parsed_results:
-        field_data = {}
-        field_data['wire_type'] = result.wire_type
-        if result.wire_type == "varint":
-            field_data['data'] = result.data
-        if result.wire_type == "string":
-            field_data['data'] = result.data
-        if result.wire_type == "bytes":
-            field_data['data'] = result.data
-        elif result.wire_type == 'length_delimited':
-            field_data["data"] = parse_results(result.data.results)
-        result_dict[result.field] = field_data
-    return result_dict
-
-def get_available_room(input_text):
-    try:
-        parsed_results = Parser().parse(input_text)
-        parsed_results_objects = parsed_results
-        parsed_results_dict = parse_results(parsed_results_objects)
-        json_data = json.dumps(parsed_results_dict)
-        return json_data
-    except Exception as e:
-        return None
-
-# ---------------- GET LOGIN DATA ---------------- #
-def GET_LOGIN_DATA(JWT_TOKEN, PAYLOAD, region):
-    link = get_region_url(region)
-    if not link:
-        link = "https://clientbp.ggblueshark.com/"
-    url = f"{link}GetLoginData"
-    headers = {
-        'Expect': '100-continue',
-        'Authorization': f'Bearer {JWT_TOKEN}',
-        'X-Unity-Version': '2018.4.11f1',
-        'X-GA': 'v1 1',
-        'ReleaseVersion': 'OB53',
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Dalvik/2.1.0 (Linux; U; Android 10; G011A Build/PI)',
-        'Host': 'clientbp.common.ggblueshark.com',
-        'Connection': 'close',
-        'Accept-Encoding': 'gzip, deflate, br',
-    }
-
-    max_retries = 3
-    attempt = 0
-    while attempt < max_retries:
+    for attempt in range(3):
         try:
-            session = get_session()
-            response = session.post(url, headers=headers, data=PAYLOAD, verify=False, timeout=20)
-            response.raise_for_status()
-            x = response.content.hex()
-            json_result = get_available_room(x)
-            parsed_data = json.loads(json_result) if json_result else None
-            return parsed_data
-        except requests.RequestException:
-            attempt += 1
-            time.sleep(2)
+            logger.info(f"Account attempt {attempt+1} for {region}")
+            result = create_acc(region, name_prefix)
+
+            if result and result.get('uid') and result.get('password') and result.get('status') == "full_login":
+                return result
+        except Exception as e:
+            logger.error(f"Attempt {attempt+1} error: {e}")
+        time.sleep(1)
     return None
 
-# ---------------- GET_PAYLOAD_BY_DATA (decode JWT payload & craft final payload) ---------------- #
-def GET_PAYLOAD_BY_DATA(JWT_TOKEN, NEW_ACCESS_TOKEN, date, response, status_code, name, uid, password, region):
+def create_acc(region, name_prefix):
+    password_hash = generate_hashed_password()
     try:
-        token_payload_base64 = JWT_TOKEN.split('.')[1]
-        token_payload_base64 += '=' * ((4 - len(token_payload_base64) % 4) % 4)
-        decoded_payload = base64.urlsafe_b64decode(token_payload_base64).decode('utf-8')
-        decoded_payload = json.loads(decoded_payload)
-        NEW_EXTERNAL_ID = decoded_payload.get('external_id', '')
-        SIGNATURE_MD5 = decoded_payload.get('signature_md5', '')
-        now = datetime.now()
-        now = str(now)[:len(str(now))-7]
-
-        PAYLOAD = b':\x071.111.2\xaa\x01\x02ar\xb2\x01 55ed759fcf94f85813e57b2ec8492f5c\xba\x01\x014\xea\x01@6fb7fdef8658fd03174ed551e82b71b21db8187fa0612c8eaf1b63aa687f1eae\x9a\x06\x014\xa2\x06\x014'
-        PAYLOAD = PAYLOAD.replace(b"2023-12-24 04:21:34", str(now).encode())
-        PAYLOAD = PAYLOAD.replace(b"15f5ba1de5234a2e73cc65b6f34ce4b299db1af616dd1dd8a6f31b147230e5b6", NEW_ACCESS_TOKEN.encode("UTF-8"))
-        PAYLOAD = PAYLOAD.replace(b"4666ecda0003f1809655a7a8698573d0", NEW_EXTERNAL_ID.encode("UTF-8"))
-        PAYLOAD = PAYLOAD.replace(b"7428b253defc164018c604a1ebbfebdf", SIGNATURE_MD5.encode("UTF-8"))
-        PAYLOAD = PAYLOAD.hex()
-        PAYLOAD = encrypt_api(PAYLOAD)
-        PAYLOAD = bytes.fromhex(PAYLOAD)
-        data = GET_LOGIN_DATA(JWT_TOKEN, PAYLOAD, region)
-        
-        # Return final account data with full login status - EXACTLY like gen.py
-        return {
-            "uid": uid,
-            "password": password,
-            "name": name,
-            "region": region,
-            "status": "full_login",
-            "stage": "complete"
-        }
+        uid = guest_register_v2(password_hash)
+        access_token, open_id = grant_token_v2(uid, password_hash)
+        nickname = generate_custom_nickname(name_prefix)
     except Exception as e:
+        logger.error(f"Register/token/nickname failed: {e}")
         return None
 
-# ---------------- FLASK API ---------------- #
+    # Encode open_id for field 14
+    enc = encode_string(open_id)
+    field = codecs.decode(to_unicode_escaped(enc['field_14']), 'unicode_escape').encode('latin1')
+
+    # MajorRegister
+    result = Major_Regsiter(access_token, open_id, field, uid, password_hash, region, nickname)
+    return result
+
+# ---------------- FLASK API ----------------
 @app.route('/gen', methods=['GET'])
 def generate_accounts():
-    # Get parameters
-    name = request.args.get('name', 'HUSTLER')
     count = request.args.get('count', '1')
     region = request.args.get('region', 'IND')
-    
-    # Validate and convert count
+    name = request.args.get('name', 'STAR')
+
+    # Validate count
     try:
-        count = int(count)
-        if count > 15:
-            count = 15
-        if count < 1:
-            count = 1
+        count = min(15, max(1, int(count)))
     except:
         count = 1
-    
+
     # Validate region
     region = region.upper()
     if region not in REGION_LANG:
         region = "IND"
-    
-    print(f"Starting creation of {count} FULL LOGIN accounts for region {region} with name prefix {name}")
-    
-    # Use thread pool with limited workers
-    max_workers = 5  # Reduced for stability
-    
-    # Create accounts with retry mechanism until we get exactly the requested count of FULL LOGIN accounts
+
+    logger.info(f"Creating {count} accounts for region {region} with prefix {name}")
+
     results = []
     attempts = 0
-    max_total_attempts = count * 10
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        while len(results) < count and attempts < max_total_attempts:
-            needed = count - len(results)
-            current_batch = min(needed, max_workers)
-            
-            futures = []
-            for i in range(current_batch):
-                future = executor.submit(create_single_account, (name, region))
-                futures.append(future)
-            
+    max_total = count * 5
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        while len(results) < count and attempts < max_total:
+
+            futures = [
+                executor.submit(create_single_account, (name, region))
+                for _ in range(min(count - len(results), 5))
+            ]
+
             for future in concurrent.futures.as_completed(futures):
                 attempts += 1
-                result = future.result()
-                if result and result.get('status') == "full_login":
-                    results.append(result)
-                    account_id = result.get('account_id', 'N/A')
-                    print(f"Successfully created FULL LOGIN account {len(results)}/{count}: UID {result['uid']}, Account ID: {account_id}")
-                
+                res = future.result()
+                if res:
+                    results.append(res)
+
                 if len(results) >= count:
                     break
-            
+
             if len(results) < count:
-                time.sleep(2)  # Increased delay for stability
-    
-    # Return response
-    response_data = {
-        "success": True,
+                time.sleep(3)
+
+    # Format response similar to NEW-GENN.py format
+    formatted_results = []
+    for acc in results:
+        formatted_results.append({
+            "uid": acc.get("uid"),
+            "password": acc.get("password"),
+            "name": acc.get("name"),
+            "region": acc.get("region"),
+            "status": acc.get("status"),
+            "stage": acc.get("stage"),
+            "account_id": acc.get("account_id", "N/A")
+        })
+
+    return jsonify({
+        "success": len(results) > 0,
         "total_requested": count,
         "total_created": len(results),
-        "accounts": results,
+        "accounts": formatted_results,
         "attempts_made": attempts
-    }
-    
-    print(f"Completed: Created {len(results)} FULL LOGIN accounts out of {count} requested")
-    return jsonify(response_data)
+    })
 
 @app.route('/')
 def home():
     return jsonify({
-        "message": "FreeFire Account Generator API - FULL LOGIN ONLY",
-        "endpoint": "/gen?name=NAME&count=COUNT&region=REGION",
+        "message": "FreeFire Account Generator - v2 API (OB53)",
+        "usage": "/gen?count=COUNT&region=REGION&name=NAME",
         "max_count": 15,
-        "available_regions": list(REGION_LANG.keys()),
-        "note": "Complete account creation with account_id"
+        "regions": list(REGION_LANG.keys()),
+        "features": [
+            "Custom nickname prefix",
+            "Custom STAR password format",
+            "Auto region handling",
+            "Concurrent account creation",
+            "Account ID extraction from JWT"
+        ],
+        "credit": "t.me/PVT_STAR"
     })
 
 @app.route('/health')
 def health():
-    return jsonify({"status": "healthy", "message": "API is running"})
+    return jsonify({"status": "ok"})
 
-# For Vercel - WSGI compatible
-def application(environ, start_response):
-    return app(environ, start_response)
-
-# For local development
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=9000, debug=False)
+    port = int(os.environ.get('PORT', 3000))
+    app.run(host='0.0.0.0', port=port, debug=False)
