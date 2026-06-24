@@ -229,7 +229,7 @@ def Major_Regsiter(access_token, open_id, field, uid, password, region, nickname
     headers = {
         "Accept-Encoding": "gzip", "Authorization": "Bearer", "Connection": "Keep-Alive",
         "Content-Type": "application/x-www-form-urlencoded", "Expect": "100-continue",
-        "Host": "loginbp.ggpolarbear.com", "ReleaseVersion": "OB53",
+        "Host": "loginbp.ggpolarbear.com", "ReleaseVersion": "OB54",
         "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_I005DA Build/PI)",
         "X-GA": "v1 1", "X-Unity-Version": "2018.4.11f1"
     }
@@ -254,7 +254,7 @@ def login(uid, password, access_token, open_id, response_hex, status_code, name,
     headers = {
         "Accept-Encoding": "gzip", "Authorization": "Bearer", "Connection": "Keep-Alive",
         "Content-Type": "application/x-www-form-urlencoded", "Expect": "100-continue",
-        "Host": "loginbp.ggpolarbear.com", "ReleaseVersion": "OB53",
+        "Host": "loginbp.ggpolarbear.com", "ReleaseVersion": "OB54",
         "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_I005DA Build/PI)",
         "X-GA": "v1 1", "X-Unity-Version": "2018.4.11f1"
     }
@@ -303,7 +303,7 @@ def login(uid, password, access_token, open_id, response_hex, status_code, name,
                 'Connection': "Keep-Alive", 'Accept-Encoding': "gzip",
                 'Content-Type': "application/x-www-form-urlencoded", 'Expect': "100-continue",
                 'Authorization': f"Bearer {jwt_token}", 'X-Unity-Version': "2018.4.11f1",
-                'X-GA': "v1 1", 'ReleaseVersion': "OB53"
+                'X-GA': "v1 1", 'ReleaseVersion': "OB54"
             }
             choose_url = "https://loginbp.ggpolarbear.com/ChooseRegion"
             requests.post(choose_url, data=choose_payload, headers=choose_headers, verify=False, timeout=30)
@@ -423,7 +423,7 @@ def generate_accounts():
 @app.route('/')
 def home():
     return jsonify({
-        "message": "FreeFire Account Generator - v2 API (OB53)",
+        "message": "FreeFire Account Generator - v2 API (OB54)",
         "usage": "/gen?count=COUNT&region=REGION&name=NAME",
         "max_count": 15,
         "regions": list(REGION_LANG.keys()),
