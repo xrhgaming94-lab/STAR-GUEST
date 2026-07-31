@@ -61,6 +61,11 @@ def get_region_url(region_code: str) -> str:
     return REGION_URLS.get(region_code, None)
 
 thread_local = threading.local()
+_proxy_list = []
+
+def set_proxies(proxies):
+    global _proxy_list
+    _proxy_list = list(proxies)
 
 def get_session():
     if not hasattr(thread_local, "session"):
@@ -71,6 +76,11 @@ def get_session():
         adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=100, pool_maxsize=100)
         thread_local.session.mount("http://", adapter)
         thread_local.session.mount("https://", adapter)
+    if _proxy_list:
+        proxy = random.choice(_proxy_list)
+        thread_local.session.proxies = {"http": proxy, "https": proxy}
+    else:
+        thread_local.session.proxies = {}
     return thread_local.session
 
 # ---------------- PROTOBUF ENCODING ---------------- #
@@ -106,25 +116,11 @@ def CrEaTe_ProTo(fields):
     return packet
 
 # ---------------- AES ENCRYPTION ---------------- #
-def E_AEs(Pc):
-    Z = bytes.fromhex(Pc)
-    key_bytes = bytes([89,103,38,116,99,37,68,69,117,104,54,37,90,99,94,56])
-    iv = bytes([54,111,121,90,68,114,50,50,69,51,121,99,104,106,77,37])
-    K = AES.new(key_bytes, AES.MODE_CBC, iv)
-    R = K.encrypt(pad(Z, AES.block_size))
-    return bytes.fromhex(R.hex())
-
 def encrypt_api(plain_text):
     plain_text = bytes.fromhex(plain_text)
-    key_bytes = bytes([89,103,38,116,99,37,68,69,117,104,54,37,90,99,94,56])
-    iv = bytes([54,111,121,90,68,114,50,50,69,51,121,99,104,106,77,37])
-    cipher = AES.new(key_bytes, AES.MODE_CBC, iv)
+    cipher = AES.new(AES_KEY, AES.MODE_CBC, AES_IV)
     cipher_text = cipher.encrypt(pad(plain_text, AES.block_size))
     return cipher_text.hex()
-
-def encrypt_aes_cbc(plain_bytes: bytes) -> bytes:
-    cipher = AES.new(AES_KEY, AES.MODE_CBC, AES_IV)
-    return cipher.encrypt(pad(plain_bytes, AES.block_size))
 
 # ---------------- JWT ACCOUNT_ID EXTRACTION (from NEW-GENN.py) ---------------- #
 def extract_account_id_from_jwt(jwt_token):
@@ -238,7 +234,7 @@ def Major_Regsiter(access_token, open_id, field, uid, password, region, nickname
         13: 1, 14: field, 15: "en", 16: 2
     }
     payload_hex = CrEaTe_ProTo(payload).hex()
-    payload_enc = E_AEs(payload_hex).hex()
+    payload_enc = encrypt_api(payload_hex)
     body = bytes.fromhex(payload_enc)
     response = session.post(url, headers=headers, data=body, verify=False, timeout=30)
     if response.status_code != 200:
@@ -279,12 +275,19 @@ def login(uid, password, access_token, open_id, response_hex, status_code, name,
     response_text = RESPONSE.text
     jwt_token = None
     account_id = None
-    
-    # Find JWT token in response
+
+    # Find JWT token in response - clean extraction
     jwt_start = response_text.find("eyJ")
     if jwt_start != -1:
-        jwt_token = response_text[jwt_start:]
-        # Extract account_id from JWT
+        raw = response_text[jwt_start:]
+        dot1 = raw.find(".")
+        dot2 = raw.find(".", dot1 + 1) if dot1 > 0 else -1
+        if dot2 > 0:
+            b64_chars = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-=")
+            end = dot2 + 1
+            while end < len(raw) and raw[end] in b64_chars:
+                end += 1
+            jwt_token = raw[:end]
         account_id = extract_account_id_from_jwt(jwt_token)
     
     if not account_id:
@@ -318,7 +321,7 @@ def login(uid, password, access_token, open_id, response_hex, status_code, name,
         "status": "full_login", 
         "stage": "complete",
         "account_id": account_id,
-        "jwt_token": jwt_token[:100] + "..." if jwt_token and len(jwt_token) > 100 else jwt_token
+        "jwt_token": jwt_token
     }
 
 # ---------- Main account creation ----------
@@ -334,7 +337,7 @@ def create_single_account(args):
                 return result
         except Exception as e:
             logger.error(f"Attempt {attempt+1} error: {e}")
-        time.sleep(1)
+        time.sleep(0.2)
     return None
 
 def create_acc(region, name_prefix):
@@ -397,7 +400,7 @@ def generate_accounts():
                     break
 
             if len(results) < count:
-                time.sleep(3)
+                time.sleep(0.5)
 
     # Format response similar to NEW-GENN.py format
     formatted_results = []
